@@ -26,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var refreshButton: Button
     private lateinit var testConnectionButton: Button
     private lateinit var selectApkButton: Button
+    private lateinit var checkUpdateButton: Button
 
     private val selectApkLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
@@ -47,6 +48,7 @@ class MainActivity : AppCompatActivity() {
         refreshButton = findViewById(R.id.refreshButton)
         testConnectionButton = findViewById(R.id.testConnectionButton)
         selectApkButton = findViewById(R.id.selectApkButton)
+        checkUpdateButton = findViewById(R.id.checkUpdateButton)
 
         refreshButton.setOnClickListener {
             checkStatus()
@@ -58,6 +60,10 @@ class MainActivity : AppCompatActivity() {
 
         selectApkButton.setOnClickListener {
             selectApkLauncher.launch("application/vnd.android.package-archive")
+        }
+
+        checkUpdateButton.setOnClickListener {
+            checkForUpdates()
         }
     }
 
@@ -282,6 +288,96 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "❌ Authorization failed: ${error.message}\n\nMake sure you tapped 'Always allow' on the prompt.", Toast.LENGTH_LONG).show()
                 testConnectionButton.isEnabled = true
                 testConnectionButton.text = "Test Connection"
+            }
+        }
+    }
+
+    private fun checkForUpdates() {
+        checkUpdateButton.isEnabled = false
+        checkUpdateButton.text = "Checking..."
+
+        lifecycleScope.launch {
+            val updateInfo = UpdateChecker.checkForUpdate(this@MainActivity)
+
+            if (updateInfo != null) {
+                showUpdateDialog(updateInfo)
+            } else {
+                Toast.makeText(
+                    this@MainActivity,
+                    "You're running the latest version!",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+
+            checkUpdateButton.isEnabled = true
+            checkUpdateButton.text = "Check for Updates"
+        }
+    }
+
+    private fun showUpdateDialog(updateInfo: UpdateChecker.UpdateInfo) {
+        val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName
+        val message = buildString {
+            append("A new version is available!\n\n")
+            append("Current: $currentVersion\n")
+            append("Latest: ${updateInfo.versionName}\n\n")
+            if (updateInfo.releaseNotes.isNotBlank()) {
+                append("What's new:\n")
+                append(updateInfo.releaseNotes.take(200))
+                if (updateInfo.releaseNotes.length > 200) {
+                    append("...")
+                }
+                append("\n\n")
+            }
+            append("Note: The app will close during the update and restart with the new version.")
+        }
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Update Available")
+            .setMessage(message)
+            .setPositiveButton("Download & Install") { _, _ ->
+                downloadAndInstallUpdate(updateInfo)
+            }
+            .setNegativeButton("Not Now", null)
+            .setCancelable(true)
+            .show()
+    }
+
+    private fun downloadAndInstallUpdate(updateInfo: UpdateChecker.UpdateInfo) {
+        val progressDialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Downloading Update")
+            .setMessage("Downloading version ${updateInfo.versionName}...\n0%")
+            .setCancelable(false)
+            .create()
+
+        progressDialog.show()
+
+        lifecycleScope.launch {
+            val result = UpdateManager.downloadAndInstall(
+                this@MainActivity,
+                updateInfo.downloadUrl,
+                updateInfo.versionName
+            ) { progress ->
+                progressDialog.setMessage("Downloading version ${updateInfo.versionName}...\n$progress%")
+            }
+
+            progressDialog.dismiss()
+
+            result.onSuccess { message ->
+                // Show a toast before the app closes
+                Toast.makeText(
+                    this@MainActivity,
+                    "Installing update via ADB...\nApp will restart shortly.",
+                    Toast.LENGTH_LONG
+                ).show()
+                // Note: App will be killed by Android during the update process
+            }
+
+            result.onFailure { error ->
+                androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Update Failed")
+                    .setMessage("Failed to install update: ${error.message}\n\nMake sure ADB is connected and authorized.")
+                    .setPositiveButton("OK", null)
+                    .show()
             }
         }
     }
